@@ -43,3 +43,7 @@ next-env.d.ts
 # serwist (generated at build time)
 public/sw*
 public/swe-worker*
+
+# onnx runtime wasm, copied from node_modules by scripts/copy-ort-wasm.mjs
+public/ort-wasm.wasm
+public/ort-wasm-simd.wasm

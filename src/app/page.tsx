@@ -1,6 +1,6 @@
 "use client";
 
-import { Camera } from "lucide-react";
+import Scanner from "@/components/Scanner";
 import { Component, useEffect, useState, type ReactNode } from "react";
 
 type BoundaryState = {
@@ -99,19 +99,7 @@ function HomeScreen() {
       <main className="flex flex-1 flex-col gap-5 px-5 py-5">
         <NetworkStatus />
 
-        <section
-          aria-label="Leaf scan"
-          className="flex flex-1 flex-col items-center justify-center rounded-3xl border border-emerald-200 bg-white px-6 py-10 text-center shadow-sm"
-        >
-          <div className="flex h-28 w-28 items-center justify-center rounded-full bg-emerald-100 text-emerald-900">
-            <Camera aria-hidden="true" size={52} strokeWidth={1.75} />
-          </div>
-          <h2 className="mt-5 text-xl font-semibold">Scan a coffee leaf</h2>
-          <p className="mt-2 max-w-xs text-base leading-relaxed text-stone-600">
-            Camera diagnosis runs on this phone in the next step. No signal
-            required.
-          </p>
-        </section>
+        <Scanner />
       </main>
     </div>
   );

@@ -20,6 +20,16 @@ const withSerwist = withSerwistInit({
 /** @type {import("next").NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  webpack(config, { isServer }) {
+    if (!isServer) {
+      config.resolve.alias = {
+        ...config.resolve.alias,
+        // The package "node" export uses fs. The browser build must stay in WASM.
+        "onnxruntime-web$": "onnxruntime-web/wasm",
+      };
+    }
+    return config;
+  },
 };
 
 export default withSerwist(nextConfig);
