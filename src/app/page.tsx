@@ -2,6 +2,7 @@
 
 import MarketContextCard from "@/components/MarketContextCard";
 import Scanner from "@/components/Scanner";
+import SyncManager from "@/components/SyncManager";
 import VoiceAssistant from "@/components/VoiceAssistant";
 import { seedMarketPrices } from "@/lib/db";
 import { Component, useEffect, useState, type ReactNode } from "react";
@@ -106,6 +107,7 @@ function HomeScreen() {
       </header>
 
       <main className="flex flex-1 flex-col gap-5 px-5 py-5">
+        <SyncManager />
         <NetworkStatus />
 
         <Scanner onDiseaseDetected={setDiseaseDetected} />

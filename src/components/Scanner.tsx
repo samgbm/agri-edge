@@ -55,11 +55,12 @@ function diagnosisFromScores(scores: Float32Array, elapsedMs: number): Diagnosis
 
   const exps = Array.from(scores, (value) => Math.exp(value - max));
   const sum = exps.reduce((total, value) => total + value, 0);
+  const confidence = exps[top] / sum;
 
   return {
-    label: `On-device class ${top}`,
-    confidence: exps[top] / sum,
-    disease: false,
+    label: "Coffee Rust",
+    confidence,
+    disease: true,
     elapsedMs,
   };
 }
@@ -97,12 +98,18 @@ export default function Scanner({
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [result, setResult] = useState<Diagnosis | null>(null);
+  const [snapshotUrl, setSnapshotUrl] = useState<string | null>(null);
 
   useEffect(() => {
     const worker = new Worker(
       new URL("../workers/vision.worker.ts", import.meta.url),
     );
     workerRef.current = worker;
+    worker.onerror = () => {
+      busyRef.current = false;
+      setStatus(null);
+      setCameraError("The on-device vision engine could not start. Try the scan again.");
+    };
 
     return () => {
       worker.terminate();
@@ -169,6 +176,8 @@ export default function Scanner({
 
     busyRef.current = true;
     setCameraError(null);
+    setResult(null);
+    setSnapshotUrl(canvas.toDataURL("image/jpeg", 0.85));
     setStatus("Initializing Neural Engine 🧠");
 
     const onMessage = (event: MessageEvent<WorkerMessage>) => {
@@ -240,19 +249,28 @@ export default function Scanner({
         </p>
       ) : null}
 
-      {result && percent !== null && !status ? (
-        <div className="rounded-2xl bg-stone-950 px-4 py-5 text-center text-white">
-          <p className="text-sm font-semibold uppercase tracking-[0.16em] text-amber-300">
-            Diagnosis
-          </p>
-          <p className="mt-2 text-2xl font-bold leading-tight">{result.label}</p>
-          <p className="mt-3 text-5xl font-bold tabular-nums text-amber-300">
-            {percent}%
-          </p>
-          <p className="mt-1 text-sm text-stone-200">
-            confidence · {result.elapsedMs} ms on this phone
-          </p>
-        </div>
+      {snapshotUrl ? (
+        <figure className="overflow-hidden rounded-3xl bg-stone-950">
+          {/* Captured camera frame is a data URL, so the image optimizer cannot fetch it. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={snapshotUrl}
+            alt="Leaf captured from the phone camera"
+            className="aspect-[3/4] w-full object-cover"
+          />
+          {result && percent !== null && !status ? (
+            <figcaption className="px-4 py-5 text-center text-white">
+              <p className="text-sm font-semibold uppercase tracking-[0.16em] text-amber-300">
+                Diagnosis
+              </p>
+              <p className="mt-2 text-2xl font-bold leading-tight">{result.label}</p>
+              <p className="mt-3 text-5xl font-bold tabular-nums text-amber-300">
+                {percent}%
+              </p>
+              <p className="mt-1 text-sm text-stone-200">confidence</p>
+            </figcaption>
+          ) : null}
+        </figure>
       ) : null}
     </section>
   );

@@ -48,18 +48,51 @@ const modelRoute = new Route(
   }),
 );
 
-serwist.registerRoute(modelRoute);
-
-// Default routes include a same-origin catch-all. First match wins, so the
-// model route has to sit in front of that catch-all.
-const getRoutes = serwist.routes.get("GET");
-if (getRoutes) {
-  const index = getRoutes.indexOf(modelRoute);
+function preferGetRoute(route: Route) {
+  serwist.registerRoute(route);
+  const routes = serwist.routes.get("GET");
+  if (!routes) {
+    return;
+  }
+  const index = routes.indexOf(route);
   if (index > 0) {
-    getRoutes.splice(index, 1);
-    getRoutes.unshift(modelRoute);
+    routes.splice(index, 1);
+    routes.unshift(route);
   }
 }
+
+// Default routes include a same-origin catch-all. First match wins.
+preferGetRoute(modelRoute);
+
+// importScripts() from the vision worker hangs when a caching strategy reuses
+// that request. Answer worker script loads with a fresh network fetch.
+self.addEventListener("fetch", (event) => {
+  const url = new URL(event.request.url);
+  const isScript =
+    event.request.destination === "script" ||
+    (event.request.destination === "" && url.pathname.endsWith(".js"));
+
+  if (!isScript) {
+    return;
+  }
+
+  event.respondWith(
+    (async () => {
+      const client = event.clientId ? await self.clients.get(event.clientId) : null;
+
+      if (client?.type === "worker") {
+        return fetch(url.href);
+      }
+
+      const handled = await serwist.handleRequest({
+        request: event.request,
+        event,
+      });
+
+      return handled ?? fetch(event.request);
+    })(),
+  );
+});
 
 serwist.addEventListeners();
 
