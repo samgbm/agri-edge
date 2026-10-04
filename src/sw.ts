@@ -1,4 +1,5 @@
 /// <reference lib="webworker" />
+import { flushOutbox, SYNC_TAG } from "./lib/voiceQueue";
 import { defaultCache } from "@serwist/next/worker";
 import {
   CacheFirst,
@@ -98,22 +99,38 @@ serwist.addEventListeners();
 
 type QuestionSyncEvent = ExtendableEvent & { tag: string };
 
-async function notifyQuestionSync() {
+async function deliverQueuedQuestions() {
   const clients = await self.clients.matchAll({
     type: "window",
     includeUncontrolled: true,
   });
 
-  await Promise.all(
-    clients.map((client) => client.postMessage({ type: "sync-questions" })),
-  );
+  await flushOutbox(async (reply) => {
+    if (clients.length === 0) {
+      return false;
+    }
+
+    await Promise.all(
+      clients.map((client) =>
+        client.postMessage({
+          type: "voice-reply",
+          id: reply.id,
+          question: reply.question,
+          reply: reply.reply,
+          meaning: reply.meaning,
+        }),
+      ),
+    );
+
+    return true;
+  });
 }
 
 self.addEventListener("sync", (event) => {
   const syncEvent = event as QuestionSyncEvent;
-  if (syncEvent.tag !== "sync-questions") {
+  if (syncEvent.tag !== SYNC_TAG) {
     return;
   }
 
-  syncEvent.waitUntil(notifyQuestionSync());
+  syncEvent.waitUntil(deliverQueuedQuestions());
 });

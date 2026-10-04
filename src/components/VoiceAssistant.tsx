@@ -4,15 +4,16 @@ import { Mic } from "lucide-react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useEffect, useState } from "react";
 import { db } from "@/lib/db";
+import {
+  askVoiceBackend,
+  flushOutbox,
+  SYNC_TAG,
+  transcriptOf,
+  type VoiceReply,
+} from "@/lib/voiceQueue";
 
 const LOCAL_LANGUAGE = "zu-ZA";
-const SYNC_TAG = "sync-questions";
-
-type AskReply = {
-  answer: string;
-  meaning: string;
-  question: string;
-};
+const QUEUED = "Queued ⏳";
 
 type RecognitionResultEvent = {
   results: ArrayLike<ArrayLike<{ transcript: string }>>;
@@ -33,7 +34,8 @@ type BrowserRecognition = {
   stop: () => void;
 };
 
-let flushLock: Promise<void> | null = null;
+const heardIds = new Set<number>();
+let resumeLock: Promise<void> | null = null;
 
 function recognitionConstructor(): (new () => BrowserRecognition) | null {
   if (typeof window === "undefined") {
@@ -61,7 +63,7 @@ function speakIsiZulu(text: string) {
 
 async function registerQuestionSync() {
   if (!("serviceWorker" in navigator)) {
-    return;
+    return false;
   }
 
   try {
@@ -71,77 +73,104 @@ async function registerQuestionSync() {
         sync?: { register: (tag: string) => Promise<void> };
       }
     ).sync;
-    await syncManager?.register(SYNC_TAG);
+
+    if (!syncManager) {
+      return false;
+    }
+
+    await syncManager.register(SYNC_TAG);
+    return true;
   } catch {
-    // The online listener still sends the outbox when the signal returns.
+    return false;
   }
 }
 
-async function postQuestion(text: string): Promise<AskReply> {
-  const response = await fetch("/api/ask", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, language: LOCAL_LANGUAGE }),
-  });
-
-  if (!response.ok) {
-    throw new Error("The advisor did not answer.");
+function hearReply(
+  reply: VoiceReply,
+  onReply: (reply: VoiceReply) => void,
+) {
+  if (reply.id != null) {
+    if (heardIds.has(reply.id)) {
+      return;
+    }
+    heardIds.add(reply.id);
+    void db.outbox.delete(reply.id);
   }
 
-  const payload = (await response.json()) as {
-    answer?: string;
-    meaning?: string;
-  };
-
-  return {
-    question: text,
-    answer: payload.answer ?? "",
-    meaning: payload.meaning ?? "",
-  };
+  onReply(reply);
+  speakIsiZulu(reply.reply);
 }
 
-function deliverQueued(onReply: (reply: AskReply) => void) {
-  if (typeof navigator === "undefined" || !navigator.onLine) {
+async function speakReadyAnswers(onReply: (reply: VoiceReply) => void) {
+  const ready = await db.outbox.filter((item) => item.status === "ready").toArray();
+
+  for (const item of ready) {
+    if (!item.reply) {
+      continue;
+    }
+
+    hearReply(
+      {
+        id: item.id,
+        question: transcriptOf(item),
+        reply: item.reply,
+        meaning: item.meaning ?? "",
+      },
+      onReply,
+    );
+  }
+}
+
+function resumeQueue(onReply: (reply: VoiceReply) => void) {
+  if (typeof navigator === "undefined") {
     return Promise.resolve();
   }
 
-  if (flushLock) {
-    return flushLock;
+  if (resumeLock) {
+    return resumeLock;
   }
 
-  flushLock = (async () => {
-    const items = await db.outbox.orderBy("timestamp").toArray();
+  resumeLock = (async () => {
+    await speakReadyAnswers(onReply);
 
-    for (const item of items) {
-      if (!navigator.onLine || item.id == null) {
-        return;
-      }
-
-      try {
-        const reply = await postQuestion(item.text);
-        await db.outbox.delete(item.id);
-        onReply(reply);
-        speakIsiZulu(reply.answer);
-      } catch {
-        return;
-      }
+    if (!navigator.onLine) {
+      return;
     }
+
+    const waiting = await db.outbox
+      .filter((item) => {
+        const status = item.status ?? "queued";
+        return status === "queued" || status === "sending";
+      })
+      .count();
+
+    if (waiting === 0) {
+      return;
+    }
+
+    await registerQuestionSync();
+    await flushOutbox(async (reply) => {
+      hearReply(reply, onReply);
+      return true;
+    });
   })().finally(() => {
-    flushLock = null;
+    resumeLock = null;
   });
 
-  return flushLock;
+  return resumeLock;
 }
 
 export default function VoiceAssistant() {
-  const queued = useLiveQuery(() => db.outbox.orderBy("timestamp").toArray());
+  const queued = useLiveQuery(() =>
+    db.outbox.filter((item) => (item.status ?? "queued") !== "ready").toArray(),
+  );
   const [online, setOnline] = useState<boolean | null>(null);
   const [listening, setListening] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const [reply, setReply] = useState<AskReply | null>(null);
+  const [reply, setReply] = useState<VoiceReply | null>(null);
 
   useEffect(() => {
-    const publishReply = (next: AskReply) => {
+    const publishReply = (next: VoiceReply) => {
       setReply(next);
       setNotice(null);
     };
@@ -150,16 +179,35 @@ export default function VoiceAssistant() {
       const connected = navigator.onLine;
       setOnline(connected);
       if (connected) {
-        void deliverQueued(publishReply);
+        void resumeQueue(publishReply);
       }
     };
 
-    const onWorkerMessage = (event: MessageEvent<{ type?: string }>) => {
-      if (event.data?.type === SYNC_TAG) {
-        void deliverQueued(publishReply);
+    const onWorkerMessage = (
+      event: MessageEvent<{
+        type?: string;
+        id?: number;
+        question?: string;
+        reply?: string;
+        meaning?: string;
+      }>,
+    ) => {
+      if (event.data?.type !== "voice-reply" || !event.data.reply) {
+        return;
       }
+
+      hearReply(
+        {
+          id: event.data.id,
+          question: event.data.question ?? "",
+          reply: event.data.reply,
+          meaning: event.data.meaning ?? "",
+        },
+        publishReply,
+      );
     };
 
+    void resumeQueue(publishReply);
     syncOnline();
     window.addEventListener("online", syncOnline);
     window.addEventListener("offline", syncOnline);
@@ -172,24 +220,30 @@ export default function VoiceAssistant() {
     };
   }, []);
 
+  async function queueQuestion(text: string) {
+    setNotice(QUEUED);
+    await db.outbox.add({
+      text_transcript: text,
+      timestamp: Date.now(),
+      status: "queued",
+    });
+    await registerQuestionSync();
+  }
+
   async function handleTranscript(text: string) {
     if (!navigator.onLine) {
-      setNotice("Waiting for Signal ⏳");
-      await db.outbox.add({ text, timestamp: Date.now() });
-      await registerQuestionSync();
+      await queueQuestion(text);
       return;
     }
 
     setNotice("Sending on the signal…");
     try {
-      const next = await postQuestion(text);
+      const next = await askVoiceBackend(text, Date.now());
       setReply(next);
       setNotice(null);
-      speakIsiZulu(next.answer);
+      speakIsiZulu(next.reply);
     } catch {
-      setNotice("Waiting for Signal ⏳");
-      await db.outbox.add({ text, timestamp: Date.now() });
-      await registerQuestionSync();
+      await queueQuestion(text);
     }
   }
 
@@ -280,17 +334,17 @@ export default function VoiceAssistant() {
           {listening ? "Listening…" : "Ask by voice"}
         </button>
 
-        {waiting || notice === "Waiting for Signal ⏳" ? (
+        {waiting || notice === QUEUED ? (
           <p
             role="status"
             aria-live="polite"
             className="mt-4 rounded-xl bg-amber-300 px-4 py-3 text-center text-base font-extrabold text-stone-950"
           >
-            Waiting for Signal ⏳
+            {QUEUED}
           </p>
         ) : null}
 
-        {notice && notice !== "Waiting for Signal ⏳" ? (
+        {notice && notice !== QUEUED ? (
           <p role="status" className="mt-4 text-sm font-medium text-stone-700">
             {notice}
           </p>
@@ -303,8 +357,8 @@ export default function VoiceAssistant() {
                 key={item.id}
                 className="rounded-xl bg-stone-950 px-3 py-3 text-sm text-white"
               >
-                <span className="font-bold">Waiting for Signal ⏳</span>
-                <span className="mt-1 block">{item.text}</span>
+                <span className="font-bold">{QUEUED}</span>
+                <span className="mt-1 block">{transcriptOf(item)}</span>
               </li>
             ))}
           </ul>
@@ -317,7 +371,7 @@ export default function VoiceAssistant() {
             Spoken in isiZulu
           </p>
           <p lang="zu" className="mt-2 text-lg font-semibold leading-snug">
-            {reply.answer}
+            {reply.reply}
           </p>
           <p className="mt-3 text-sm leading-relaxed text-stone-200">
             {reply.meaning}

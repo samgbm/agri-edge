@@ -7,10 +7,17 @@ export type MarketPrice = {
   lastUpdated: string;
 };
 
+export type OutboxStatus = "queued" | "sending" | "ready";
+
 export type OutboxQuestion = {
   id?: number;
-  text: string;
+  text_transcript: string;
   timestamp: number;
+  status?: OutboxStatus;
+  reply?: string;
+  meaning?: string;
+  /** Increment 4 rows stored the transcript on `text`. */
+  text?: string;
 };
 
 const COFFEE_PRICE: MarketPrice = {
@@ -33,6 +40,24 @@ class AgriMarketDB extends Dexie {
       prices: "id, crop, pricePerKg, lastUpdated",
       outbox: "++id, text, timestamp",
     });
+    this.version(3)
+      .stores({
+        prices: "id, crop, pricePerKg, lastUpdated",
+        outbox: "++id, text_transcript, timestamp, status",
+      })
+      .upgrade(async (transaction) => {
+        await transaction
+          .table("outbox")
+          .toCollection()
+          .modify((row: OutboxQuestion) => {
+            if (!row.text_transcript && row.text) {
+              row.text_transcript = row.text;
+            }
+            if (!row.status) {
+              row.status = "queued";
+            }
+          });
+      });
   }
 }
 
