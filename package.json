@@ -10,6 +10,8 @@
   },
   "dependencies": {
     "@serwist/next": "^9.5.12",
+    "dexie": "^4.0.1",
+    "dexie-react-hooks": "^1.1.7",
     "lucide-react": "^1.51.0",
     "next": "16.3.8",
     "onnxruntime-web": "^1.17.1",

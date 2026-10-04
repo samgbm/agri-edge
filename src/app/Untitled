@@ -1,9 +1,0 @@
-"I have just initialized a Next.js 16 App Router project with Tailwind CSS v4 and installed @serwist/next and lucide-react. Please do the following:
-
-Configure next.config.mjs to wrap the app with @serwist/next, configuring the service worker entry point (swSrc as src/sw.ts and swDest as public/sw.js).
-
-Create the src/sw.ts file setting up the default Serwist caching strategies.
-
-Create a standard app/manifest.ts file utilizing Next.js native metadata generation for a web app named 'Agri-Edge Copilot' (use generic placeholder colors and icon paths for now).
-
-Rewrite src/app/page.tsx to include a simple, responsive mobile-first UI with a header (Agri-Edge), a main content area with a Lucide Camera placeholder icon, and a 'Network Status' banner component. This banner must use navigator.onLine and a React useEffect to dynamically show if the user is 'Online 🟢' or 'Offline 🔴'. Ensure it is styled cleanly with Tailwind. Include basic error boundaries or fallback text if the window object is not yet available."

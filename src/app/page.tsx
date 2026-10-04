@@ -1,6 +1,8 @@
 "use client";
 
+import MarketContextCard from "@/components/MarketContextCard";
 import Scanner from "@/components/Scanner";
+import { seedMarketPrices } from "@/lib/db";
 import { Component, useEffect, useState, type ReactNode } from "react";
 
 type BoundaryState = {
@@ -84,6 +86,12 @@ function NetworkStatus() {
 }
 
 function HomeScreen() {
+  const [diseaseDetected, setDiseaseDetected] = useState(false);
+
+  useEffect(() => {
+    void seedMarketPrices();
+  }, []);
+
   return (
     <div className="mx-auto flex w-full max-w-md flex-1 flex-col bg-emerald-50 text-stone-900">
       <header className="bg-emerald-950 px-5 pb-5 pt-[max(1.25rem,env(safe-area-inset-top))] text-white">
@@ -99,7 +107,10 @@ function HomeScreen() {
       <main className="flex flex-1 flex-col gap-5 px-5 py-5">
         <NetworkStatus />
 
-        <Scanner />
+        <Scanner onDiseaseDetected={setDiseaseDetected} />
+        {diseaseDetected ? (
+          <MarketContextCard diseaseDetected={diseaseDetected} />
+        ) : null}
       </main>
     </div>
   );

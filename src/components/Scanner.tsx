@@ -105,7 +105,11 @@ async function mockDiagnosis(): Promise<Diagnosis> {
   };
 }
 
-export default function Scanner() {
+export default function Scanner({
+  onDiseaseDetected,
+}: {
+  onDiseaseDetected?: (detected: boolean) => void;
+}) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [cameraReady, setCameraReady] = useState(false);
@@ -162,18 +166,23 @@ export default function Scanner() {
 
     setAnalyzing(true);
 
+    const publish = (next: Diagnosis) => {
+      setResult(next);
+      onDiseaseDetected?.(next.label === "Coffee Rust Detected");
+    };
+
     try {
       const tensor = captureFrame(video, canvas);
       console.log(tensor);
 
       try {
-        setResult(await runOnnx(tensor));
+        publish(await runOnnx(tensor));
       } catch (error) {
         console.warn(
           "ONNX model unavailable, using the offline demo result.",
           error,
         );
-        setResult(await mockDiagnosis());
+        publish(await mockDiagnosis());
       }
     } catch (error) {
       console.error(error);
