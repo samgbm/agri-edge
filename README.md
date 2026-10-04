@@ -1,3 +1,7 @@
+product demo : https://www.youtube.com/shorts/Fxer3EBv6W8
+tech demo : https://www.youtube.com/shorts/OBD5Kj20iMg
+team demo : https://www.youtube.com/shorts/Es52jyPr0tk 
+
 # Agri-Edge Copilot
 
 Agri-Edge is a phone-first progressive web app for a smallholder coffee farmer who cannot count on a signal, an extension visit, or a fair buyer. The person this build is designed around is Noor, in the Ondera highlands. Yields have slipped. The cooperative is far. The only computer in the household is her daughter’s smartphone, and the language she asks questions in is isiZulu.
