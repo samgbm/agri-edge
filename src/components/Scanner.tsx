@@ -1,25 +1,70 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { preprocessCanvasFrame } from "@/lib/leafTensor";
-
-const MODEL_URL = "/models/coffee_rust_quantized.onnx";
 
 type Diagnosis = {
   label: string;
   confidence: number;
-  mocked: boolean;
+  disease: boolean;
+  elapsedMs: number;
 };
 
-type OrtModule = typeof import("onnxruntime-web");
+type WorkerMessage =
+  | { type: "status"; message: string }
+  | { type: "result"; scores: Float32Array; elapsedMs: number }
+  | { type: "error"; message: string };
 
-let sessionPromise: Promise<import("onnxruntime-web").InferenceSession> | null =
-  null;
+function diagnosisFromScores(scores: Float32Array, elapsedMs: number): Diagnosis {
+  if (scores.length === 0) {
+    throw new Error("The model returned no scores.");
+  }
 
-function captureFrame(
-  video: HTMLVideoElement,
-  canvas: HTMLCanvasElement,
-): Float32Array {
+  if (scores.length === 1) {
+    const raw = scores[0];
+    const probability = raw >= 0 && raw <= 1 ? raw : 1 / (1 + Math.exp(-raw));
+    const rust = probability >= 0.5;
+    return {
+      label: rust ? "Coffee Rust Detected" : "No coffee rust detected",
+      confidence: rust ? probability : 1 - probability,
+      disease: rust,
+      elapsedMs,
+    };
+  }
+
+  if (scores.length === 2) {
+    const max = Math.max(scores[0], scores[1]);
+    const exps = [Math.exp(scores[0] - max), Math.exp(scores[1] - max)];
+    const rustProbability = exps[1] / (exps[0] + exps[1]);
+    const rust = rustProbability >= 0.5;
+    return {
+      label: rust ? "Coffee Rust Detected" : "No coffee rust detected",
+      confidence: rust ? rustProbability : 1 - rustProbability,
+      disease: rust,
+      elapsedMs,
+    };
+  }
+
+  let top = 0;
+  let max = scores[0];
+  for (let index = 1; index < scores.length; index += 1) {
+    if (scores[index] > max) {
+      max = scores[index];
+      top = index;
+    }
+  }
+
+  const exps = Array.from(scores, (value) => Math.exp(value - max));
+  const sum = exps.reduce((total, value) => total + value, 0);
+
+  return {
+    label: `On-device class ${top}`,
+    confidence: exps[top] / sum,
+    disease: false,
+    elapsedMs,
+  };
+}
+
+function captureFrame(video: HTMLVideoElement, canvas: HTMLCanvasElement) {
   const width = video.videoWidth;
   const height = video.videoHeight;
 
@@ -36,73 +81,7 @@ function captureFrame(
   }
 
   context.drawImage(video, 0, 0, width, height);
-  return preprocessCanvasFrame(canvas);
-}
-
-async function runOnnx(tensor: Float32Array): Promise<Diagnosis> {
-  const ort: OrtModule = await import("onnxruntime-web");
-  ort.env.wasm.wasmPaths = "/";
-  // Threaded WASM needs cross-origin isolation, which a normal phone tab does not have.
-  ort.env.wasm.numThreads = 1;
-
-  if (!sessionPromise) {
-    sessionPromise = ort.InferenceSession.create(MODEL_URL, {
-      executionProviders: ["wasm"],
-    }).catch((error: unknown) => {
-      sessionPromise = null;
-      throw error;
-    });
-  }
-
-  const session = await sessionPromise;
-  const inputName = session.inputNames[0];
-  const output = await session.run({
-    [inputName]: new ort.Tensor("float32", tensor, [1, 3, 224, 224]),
-  });
-  const scores = output[session.outputNames[0]].data as Float32Array;
-
-  return diagnosisFromScores(scores);
-}
-
-function diagnosisFromScores(scores: Float32Array): Diagnosis {
-  if (scores.length === 0) {
-    throw new Error("The model returned no scores.");
-  }
-
-  if (scores.length === 1) {
-    const raw = scores[0];
-    const probability = raw >= 0 && raw <= 1 ? raw : 1 / (1 + Math.exp(-raw));
-    const rust = probability >= 0.5;
-    return {
-      label: rust ? "Coffee Rust Detected" : "No coffee rust detected",
-      confidence: rust ? probability : 1 - probability,
-      mocked: false,
-    };
-  }
-
-  const max = Math.max(...scores);
-  const exps = Array.from(scores, (value) => Math.exp(value - max));
-  const sum = exps.reduce((total, value) => total + value, 0);
-  const rustProbability = exps[1] / sum;
-  const rust = rustProbability >= 0.5;
-
-  return {
-    label: rust ? "Coffee Rust Detected" : "No coffee rust detected",
-    confidence: rust ? rustProbability : 1 - rustProbability,
-    mocked: false,
-  };
-}
-
-async function mockDiagnosis(): Promise<Diagnosis> {
-  await new Promise((resolve) => {
-    window.setTimeout(resolve, 1500);
-  });
-
-  return {
-    label: "Coffee Rust Detected",
-    confidence: 0.89,
-    mocked: true,
-  };
+  return context.getImageData(0, 0, width, height);
 }
 
 export default function Scanner({
@@ -112,10 +91,24 @@ export default function Scanner({
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const workerRef = useRef<Worker | null>(null);
+  const busyRef = useRef(false);
   const [cameraReady, setCameraReady] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
-  const [analyzing, setAnalyzing] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
   const [result, setResult] = useState<Diagnosis | null>(null);
+
+  useEffect(() => {
+    const worker = new Worker(
+      new URL("../workers/vision.worker.ts", import.meta.url),
+    );
+    workerRef.current = worker;
+
+    return () => {
+      worker.terminate();
+      workerRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -156,40 +149,54 @@ export default function Scanner({
     };
   }, []);
 
-  async function analyzeFrame() {
+  function analyzeFrame() {
     const video = videoRef.current;
     const canvas = canvasRef.current;
+    const worker = workerRef.current;
 
-    if (!video || !canvas || analyzing) {
+    if (!video || !canvas || !worker || busyRef.current) {
       return;
     }
 
-    setAnalyzing(true);
-
-    const publish = (next: Diagnosis) => {
-      setResult(next);
-      onDiseaseDetected?.(next.label === "Coffee Rust Detected");
-    };
-
+    let image: ImageData;
     try {
-      const tensor = captureFrame(video, canvas);
-      console.log(tensor);
-
-      try {
-        publish(await runOnnx(tensor));
-      } catch (error) {
-        console.warn(
-          "ONNX model unavailable, using the offline demo result.",
-          error,
-        );
-        publish(await mockDiagnosis());
-      }
+      image = captureFrame(video, canvas);
     } catch (error) {
       console.error(error);
       setCameraError("Could not read a frame. Hold the leaf steady and try again.");
-    } finally {
-      setAnalyzing(false);
+      return;
     }
+
+    busyRef.current = true;
+    setCameraError(null);
+    setStatus("Initializing Neural Engine 🧠");
+
+    const onMessage = (event: MessageEvent<WorkerMessage>) => {
+      const message = event.data;
+
+      if (message.type === "status") {
+        setStatus(message.message);
+        return;
+      }
+
+      worker.removeEventListener("message", onMessage);
+      busyRef.current = false;
+
+      if (message.type === "error") {
+        setStatus(null);
+        setCameraError(message.message);
+        return;
+      }
+
+      console.log(message.scores);
+      const diagnosis = diagnosisFromScores(message.scores, message.elapsedMs);
+      setResult(diagnosis);
+      onDiseaseDetected?.(diagnosis.disease);
+      setStatus(null);
+    };
+
+    worker.addEventListener("message", onMessage);
+    worker.postMessage(image);
   }
 
   const percent = result ? Math.round(result.confidence * 100) : null;
@@ -214,16 +221,26 @@ export default function Scanner({
 
       <button
         type="button"
-        onClick={() => {
-          void analyzeFrame();
-        }}
-        disabled={!cameraReady || analyzing}
+        onClick={analyzeFrame}
+        disabled={!cameraReady || status !== null}
         className="h-14 w-full rounded-2xl bg-emerald-950 text-lg font-semibold text-white disabled:opacity-50"
       >
-        {analyzing ? "Analyzing on this phone…" : "Snap & Analyze"}
+        {status ?? "Snap & Analyze"}
       </button>
 
-      {result && percent !== null && (
+      {status ? (
+        <p role="status" aria-live="polite" className="text-center text-sm font-semibold text-emerald-950">
+          {status}
+        </p>
+      ) : null}
+
+      {cameraReady && cameraError ? (
+        <p role="status" className="text-center text-sm font-medium text-red-800">
+          {cameraError}
+        </p>
+      ) : null}
+
+      {result && percent !== null && !status ? (
         <div className="rounded-2xl bg-stone-950 px-4 py-5 text-center text-white">
           <p className="text-sm font-semibold uppercase tracking-[0.16em] text-amber-300">
             Diagnosis
@@ -232,14 +249,11 @@ export default function Scanner({
           <p className="mt-3 text-5xl font-bold tabular-nums text-amber-300">
             {percent}%
           </p>
-          <p className="mt-1 text-sm text-stone-200">confidence</p>
-          {result.mocked && (
-            <p className="mt-3 text-sm leading-relaxed text-amber-100">
-              Demo result. The on-device model file is not on this phone yet.
-            </p>
-          )}
+          <p className="mt-1 text-sm text-stone-200">
+            confidence · {result.elapsedMs} ms on this phone
+          </p>
         </div>
-      )}
+      ) : null}
     </section>
   );
 }

@@ -8,12 +8,17 @@ const withSerwist = withSerwistInit({
   swDest: "public/sw.js",
   cacheOnNavigation: true,
   reloadOnOnline: true,
+  // The MobileNet placeholder is about 14 MB. The default precache limit is 2 MB.
+  maximumFileSizeToCacheInBytes: 20 * 1024 * 1024,
   // Turbopack (next dev) cannot run the Serwist webpack plugin.
   // Production builds use `next build --webpack`, which emits public/sw.js.
   disable: process.env.NODE_ENV === "development",
   additionalPrecacheEntries: [
     { url: "/", revision },
     { url: "/offline", revision },
+    { url: "/models/coffee_rust_quantized.onnx", revision },
+    { url: "/ort-wasm.wasm", revision },
+    { url: "/ort-wasm-simd.wasm", revision },
   ],
 });
 

@@ -1,7 +1,13 @@
 /// <reference lib="webworker" />
 import { defaultCache } from "@serwist/next/worker";
-import type { PrecacheEntry, SerwistGlobalConfig } from "serwist";
-import { Serwist } from "serwist";
+import {
+  CacheFirst,
+  ExpirationPlugin,
+  Route,
+  Serwist,
+  type PrecacheEntry,
+  type SerwistGlobalConfig,
+} from "serwist";
 
 declare global {
   interface WorkerGlobalScope extends SerwistGlobalConfig {
@@ -28,6 +34,32 @@ const serwist = new Serwist({
     ],
   },
 });
+
+const modelRoute = new Route(
+  ({ url }) => url.pathname.endsWith(".onnx") || url.pathname.endsWith(".wasm"),
+  new CacheFirst({
+    cacheName: "agri-edge-models",
+    plugins: [
+      new ExpirationPlugin({
+        maxEntries: 5,
+        maxAgeSeconds: 30 * 24 * 60 * 60,
+      }),
+    ],
+  }),
+);
+
+serwist.registerRoute(modelRoute);
+
+// Default routes include a same-origin catch-all. First match wins, so the
+// model route has to sit in front of that catch-all.
+const getRoutes = serwist.routes.get("GET");
+if (getRoutes) {
+  const index = getRoutes.indexOf(modelRoute);
+  if (index > 0) {
+    getRoutes.splice(index, 1);
+    getRoutes.unshift(modelRoute);
+  }
+}
 
 serwist.addEventListeners();
 
