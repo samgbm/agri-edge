@@ -7,6 +7,12 @@ export type MarketPrice = {
   lastUpdated: string;
 };
 
+export type OutboxQuestion = {
+  id?: number;
+  text: string;
+  timestamp: number;
+};
+
 const COFFEE_PRICE: MarketPrice = {
   id: "coffee-arabica",
   crop: "Coffee (Arabica)",
@@ -16,11 +22,16 @@ const COFFEE_PRICE: MarketPrice = {
 
 class AgriMarketDB extends Dexie {
   prices!: EntityTable<MarketPrice, "id">;
+  outbox!: EntityTable<OutboxQuestion, "id">;
 
   constructor() {
     super("AgriMarketDB");
     this.version(1).stores({
       prices: "id, crop, pricePerKg, lastUpdated",
+    });
+    this.version(2).stores({
+      prices: "id, crop, pricePerKg, lastUpdated",
+      outbox: "++id, text, timestamp",
     });
   }
 }

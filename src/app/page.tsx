@@ -2,6 +2,7 @@
 
 import MarketContextCard from "@/components/MarketContextCard";
 import Scanner from "@/components/Scanner";
+import VoiceAssistant from "@/components/VoiceAssistant";
 import { seedMarketPrices } from "@/lib/db";
 import { Component, useEffect, useState, type ReactNode } from "react";
 
@@ -111,6 +112,7 @@ function HomeScreen() {
         {diseaseDetected ? (
           <MarketContextCard diseaseDetected={diseaseDetected} />
         ) : null}
+        <VoiceAssistant />
       </main>
     </div>
   );

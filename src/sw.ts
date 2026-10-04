@@ -30,3 +30,25 @@ const serwist = new Serwist({
 });
 
 serwist.addEventListeners();
+
+type QuestionSyncEvent = ExtendableEvent & { tag: string };
+
+async function notifyQuestionSync() {
+  const clients = await self.clients.matchAll({
+    type: "window",
+    includeUncontrolled: true,
+  });
+
+  await Promise.all(
+    clients.map((client) => client.postMessage({ type: "sync-questions" })),
+  );
+}
+
+self.addEventListener("sync", (event) => {
+  const syncEvent = event as QuestionSyncEvent;
+  if (syncEvent.tag !== "sync-questions") {
+    return;
+  }
+
+  syncEvent.waitUntil(notifyQuestionSync());
+});
